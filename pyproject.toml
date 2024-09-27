@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "adsb-mqtt"
+version = "0.1.0"
+description = ""
+authors = ["Stefan Hudelmaier <stefan.hudelmaier@device-insight.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+bufsock = "1.0"
+python-dateutil = "2.9.0.post0"
+paho-mqtt = "2.1.0"
+python-dotenv = "1.0.1"
+cachetools = "5.5.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
