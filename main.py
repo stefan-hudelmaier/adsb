@@ -1,136 +1,121 @@
 #!/usr/bin/env python3
-'''
-This script demonstrates how the SBS Client can be used to collect ADSB
-messages from a SBS server. The SBS Client provides its user with the
-ability to:
+import os
 
-  1. obtain raw SBS messages as a line of text,
-  2. obtain a processed message as a SBSMessage Python object.
-  3. record messages to a log file for later use.
+import paho.mqtt.client as mqtt
+import socket
+import time
+import logging
+import sys
+import bufsock
+from threading import Thread
 
-To collect SBS messages and parse them into a SBSMessage object
-and then write them to the terminal use the following command.
+from sbs1 import parse
+from dotenv import load_dotenv
+from cachetools import TTLCache
 
-..code-block:: console
+load_dotenv()
 
-    (venv) $ python sbs-client.py --host=127.0.0.1 --processed
-    {"message_type": "MSG", "transmission_type": 6, "session_id": 1, "aircraft_id": 1, "hex_ident": "7C7C76", "flight_id": 1, "generated_date": {"__type__": "date", "year": 2018, "month": 2, "day": 18}, "generated_time": {"__type__": "time", "hour": 21, "minute": 21, "second": 6, "microsecond": 987000}, "logged_date": {"__type__": "date", "year": 2018, "month": 2, "day": 18}, "logged_time": {"__type__": "time", "hour": 21, "minute": 21, "second": 7, "microsecond": 5000}, "callsign": null, "altitude": null, "ground_speed": null, "track": null, "lat": null, "lon": null, "vertical_rate": null, "squawk": "7220", "alert": false, "emergency": false, "spi": false, "is_on_ground": null}
-    {"message_type": "MSG", "transmission_type": 8, "session_id": 1, "aircraft_id": 1, "hex_ident": "7C7C76", "flight_id": 1, "generated_date": {"__type__": "date", "year": 2018, "month": 2, "day": 18}, "generated_time": {"__type__": "time", "hour": 21, "minute": 21, "second": 7, "microsecond": 30000}, "logged_date": {"__type__": "date", "year": 2018, "month": 2, "day": 18}, "logged_time": {"__type__": "time", "hour": 21, "minute": 21, "second": 7, "microsecond": 57000}, "callsign": null, "altitude": null, "ground_speed": null, "track": null, "lat": null, "lon": null, "vertical_rate": null, "squawk": null, "alert": null, "emergency": null, "spi": null, "is_on_ground": 0}
-    ^C
-    SIGINT, stopping.
+broker = 'gcmb.io'
+port = 8883
+client_id = 'adsb/adsb/data-generator/pub'
+username = 'adsb/adsb/data-generator'
+password = os.environ['GCMB_PASSWORD']
 
+root = logging.getLogger()
+root.setLevel(logging.DEBUG)
 
-To collect SBS messages from a SBS server and then dump the raw messages to
-the terminal use the following command.
+handler = logging.StreamHandler(sys.stdout)
+handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+root.addHandler(handler)
 
-..code-block:: console
-
-    (venv) $ python sbs-client.py --host=127.0.0.1 --raw
-    b'MSG,6,1,1,7C7C76,1,2018/02/18,21:21:06.987,2018/02/18,21:21:07.005,,,,,,,,7220,0,0,0,'
-    b'MSG,8,1,1,7C7C76,1,2018/02/18,21:21:07.030,2018/02/18,21:21:07.057,,,,,,,,,,,,0'
-    ^C
-    SIGINT, stopping.
-
-
-To collect SBS messages from a SBS server and then record them into a
-log file use the following command.
-
-..code-block:: console
-
-    (venv) $ python sbs-client.py --host=127.0.0.1 --record --record-file=sbs-messages.txt
-
-'''
-
-import argparse
-import asyncio
-import functools
-import signal
-
-from adsb import sbs
+# Keys are icao24
+flights_cache = TTLCache(maxsize=100_000, ttl=60 * 15)
 
 
-def handle_raw_msg(msg: bytes):
-    ''' Handle a raw SBS message '''
-    print(msg)
+def connect_mqtt():
+    def on_connect(client, userdata, flags, rc, properties):
+        if rc == 0:
+            print("Connected to MQTT Broker")
+        else:
+            print(f"Failed to connect, return code {rc}")
+
+    client = mqtt.Client(client_id=client_id,
+                         callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+    client.tls_set(ca_certs='/etc/ssl/certs/ca-certificates.crt')
+    client.username_pw_set(username, password)
+    client.on_connect = on_connect
+    client.connect(broker, port)
+    return client
 
 
-def handle_parsed_msg(msg: sbs.message.SBSMessage):
-    ''' Handle a processed SBS message '''
-    # We could call sbs.message.toString(msg) but the output would look
-    # just like to raw data. Instead, print out the message as JSON to
-    # convey that it has been parsed.
-    print(sbs.json_utils.dumps(msg))
+def publish(client, topic, msg):
+    result = client.publish(topic, msg, retain=True)
+    status = result[0]
+    if status == 0:
+        print(f"Sent '{msg}' to topic {topic}")
+    else:
+        print(f"Failed to send message to topic {topic}, reason: {status}")
 
 
-ARGS = argparse.ArgumentParser(description='SBS Client Example')
-ARGS.add_argument(
-    '--host',
-    metavar='<host>',
-    type=str,
-    default='localhost',
-    help='The SBS host name')
-ARGS.add_argument(
-    '--port',
-    metavar='<port>',
-    type=int,
-    default=30003,
-    help='The SBS port number. Default is 30003.')
-ARGS.add_argument(
-    '--raw',
-    action="store_true",
-    default=False,
-    help="Dump raw SBS messages to stdout")
-ARGS.add_argument(
-    '--processed',
-    action="store_true",
-    default=False,
-    help="Dump processed SBS messages to stdout")
-ARGS.add_argument(
-    '--record',
-    action="store_true",
-    help="Record SBS messages to a log file")
-ARGS.add_argument(
-    '--record-file',
-    type=str,
-    default=None,
-    help="Record SBS messages into this file")
+def publish_stats(mqtt_client):
+    while True:
+        time.sleep(5)
+        topic = "adsb/adsb/stats/flights_seen_in_last_15m"
+        publish(mqtt_client, topic, f'{len(flights_cache)}')
+
+
+def main():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect(("127.0.0.1", 5002))
+    bs = bufsock.bufsock(s)
+
+    mqtt_client = connect_mqtt()
+
+    callsigns = {}
+
+    publish_stats_thread = Thread(target=publish_stats, args=(mqtt_client,))
+    publish_stats_thread.start()
+
+    while True:
+        try:
+            data = bs.readto(b'\n')
+            print(data)
+            parsed_data = parse(data.decode('utf-8'))
+            if parsed_data is None:
+                continue
+            # print(parsed_data)
+            icao24 = parsed_data['icao24']
+            callsign = parsed_data['callsign']
+            if callsign is not None:
+                callsigns[icao24] = callsign
+                # print(callsign)
+
+            lat = parsed_data['lat']
+            lon = parsed_data['lon']
+
+            callsign = callsigns[icao24] if icao24 in callsigns else None
+
+            if callsign is not None:
+                flights_cache[icao24] = None
+
+            if lat is not None and lon is not None and callsign is not None:
+                print(f"Flight: {callsigns.get(icao24, 'Unknown')}, Lat: {lat}, Lon: {lon}")
+                topic = f"adsb/adsb/flights/{callsign}/location"
+                publish(mqtt_client, topic, f'{lat}, {lon}')
+
+            mqtt_client.loop(timeout=0.01)
+
+        except KeyboardInterrupt:
+            print('Interrupted')
+            publish_stats_thread.join()
+            mqtt_client.disconnect()
+            break
+        except Exception as e:
+            print(f"Caught exception")
+            print(e)
 
 
 if __name__ == '__main__':
-
-    args = ARGS.parse_args()
-
-    loop = asyncio.get_event_loop()
-
-    client = sbs.client.Client(
-        host=args.host,
-        port=args.port,
-        on_raw_msg_callback=handle_raw_msg if args.raw else None,
-        on_msg_callback=handle_parsed_msg if args.processed else None,
-        record=args.record,
-        record_file=args.record_file)
-
-    def signal_handler(signame, client, loop):
-        print("\n{}, stopping.".format(signame))
-        loop.stop()
-
-    for signame in ('SIGINT', 'SIGTERM'):
-        signum = getattr(signal, signame)
-        handler = functools.partial(signal_handler, signame, client, loop)
-        loop.add_signal_handler(signum, handler)
-
-    loop.run_until_complete(client.start())
-
-    try:
-        loop.run_forever()
-    except KeyboardInterrupt:
-        print('KeyboardInterrupt')
-        pass
-    except RuntimeError:
-        # Ctrl+c will trigger this
-        print('RuntimeError')
-        pass
-    finally:
-        loop.run_until_complete(client.stop())
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        loop.close()
+    main()
