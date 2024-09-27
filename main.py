@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import queue
 
 import paho.mqtt.client as mqtt
 import socket
@@ -33,6 +34,7 @@ root.addHandler(handler)
 # Keys are icao24
 flights_cache = TTLCache(maxsize=100_000, ttl=60 * 15)
 
+message_queue = queue.Queue(maxsize=100000)
 
 def connect_mqtt():
     def on_connect(client, userdata, flags, rc, properties):
@@ -41,13 +43,14 @@ def connect_mqtt():
         else:
             print(f"Failed to connect, return code {rc}")
 
-    client = mqtt.Client(client_id=client_id,
-                         callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
-    client.tls_set(ca_certs='/etc/ssl/certs/ca-certificates.crt')
-    client.username_pw_set(username, password)
-    client.on_connect = on_connect
-    client.connect(broker, port)
-    return client
+    mqtt_client = mqtt.Client(client_id=client_id,
+                              callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+    mqtt_client.tls_set(ca_certs='/etc/ssl/certs/ca-certificates.crt')
+    mqtt_client.username_pw_set(username, password)
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_disconnect = lambda client, userdata, disconnect_flags, reason_code, properties: print(f"Disconnected from MQTT Broker, return code {reason_code}")
+    mqtt_client.connect(broker, port)
+    return mqtt_client
 
 
 def publish(client, topic, msg):
@@ -62,26 +65,22 @@ def publish(client, topic, msg):
 def publish_stats(mqtt_client):
     while True:
         time.sleep(5)
-        topic = "adsb/adsb/stats/flights_seen_in_last_15m"
-        publish(mqtt_client, topic, f'{len(flights_cache)}')
+        publish(mqtt_client, "adsb/adsb/stats/flights_seen_in_last_15m", f'{len(flights_cache)}')
+        publish(mqtt_client, "adsb/adsb/stats/queue_size", f'{message_queue.qsize()}')
 
 
-def main():
+def consume_from_adsb_hub():
+
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect(("127.0.0.1", 5002))
     bs = bufsock.bufsock(s)
 
-    mqtt_client = connect_mqtt()
-
     callsigns = {}
-
-    publish_stats_thread = Thread(target=publish_stats, args=(mqtt_client,))
-    publish_stats_thread.start()
 
     while True:
         try:
             data = bs.readto(b'\n')
-            print(data)
+            #print(data)
             parsed_data = parse(data.decode('utf-8'))
             if parsed_data is None:
                 continue
@@ -100,21 +99,45 @@ def main():
             if callsign is not None:
                 flights_cache[icao24] = None
 
-            if lat is not None and lon is not None and callsign is not None:
-                print(f"Flight: {callsigns.get(icao24, 'Unknown')}, Lat: {lat}, Lon: {lon}")
-                topic = f"adsb/adsb/flights/{callsign}/location"
-                publish(mqtt_client, topic, f'{lat}, {lon}')
+            message_queue.put({'icao24': icao24, 'callsign': callsign, 'lat': lat, 'lon': lon})
 
-            mqtt_client.loop(timeout=0.01)
-
-        except KeyboardInterrupt:
-            print('Interrupted')
-            publish_stats_thread.join()
-            mqtt_client.disconnect()
-            break
         except Exception as e:
             print(f"Caught exception")
             print(e)
+
+def publish_queue_message(mqtt_client):
+    while True:
+        try:
+            message = message_queue.get()
+            icao24 = message['icao24']
+            callsign = message['callsign']
+            lat = message['lat']
+            lon = message['lon']
+
+            if lat is not None and lon is not None and callsign is not None:
+                #print(f"Flight: {callsigns.get(icao24, 'Unknown')}, Lat: {lat}, Lon: {lon}")
+                topic = f"adsb/adsb/flights/{callsign}/location"
+                publish(mqtt_client, topic, f'{lat},{lon}')
+
+        except Exception as e:
+            print(f"Caught exception")
+            print(e)
+
+
+def main():
+
+    mqtt_client = connect_mqtt()
+
+    publish_stats_thread = Thread(target=publish_stats, args=(mqtt_client,))
+    publish_stats_thread.start()
+
+    adsb_hub_thread = Thread(target=consume_from_adsb_hub, args=())
+    adsb_hub_thread.start()
+
+    mqtt_publish_thread = Thread(target=publish_queue_message, args=(mqtt_client,))
+    mqtt_publish_thread.start()
+
+    mqtt_client.loop_forever()
 
 
 if __name__ == '__main__':
