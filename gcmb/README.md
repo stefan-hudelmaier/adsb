@@ -1,6 +1,7 @@
 ## ADS-B
 
-This project contains ADS-B data. The data originates from [ADSBHub](https://www.adsbhub.org/).
+This project contains the live positions of aircraft collected via [ADS-B](https://en.wikipedia.org/wiki/Automatic_Dependent_Surveillance%E2%80%93Broadcast) data. 
+The data originates from [ADSBHub](https://www.adsbhub.org/).
 
 ## Stats
 

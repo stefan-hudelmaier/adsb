@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 import os
 import queue
+from argparse import ArgumentParser
 
 import paho.mqtt.client as mqtt
 import socket
 import time
 import logging
 import sys
-import bufsock
 from threading import Thread
 
 from sbs1 import parse
@@ -21,6 +21,9 @@ port = 8883
 client_id = 'adsb/adsb/data-generator/pub'
 username = 'adsb/adsb/data-generator'
 password = os.environ['GCMB_PASSWORD']
+
+sbs1_host = os.environ.get('SBS1_HOST', 'localhost')
+sbs1_port = int(os.environ.get('SBS1_PORT', '5002'))
 
 root = logging.getLogger()
 root.setLevel(logging.DEBUG)
@@ -36,6 +39,7 @@ flights_cache = TTLCache(maxsize=100_000, ttl=60 * 15)
 
 message_queue = queue.Queue(maxsize=100000)
 
+
 def connect_mqtt():
     def on_connect(client, userdata, flags, rc, properties):
         if rc == 0:
@@ -48,7 +52,8 @@ def connect_mqtt():
     mqtt_client.tls_set(ca_certs='/etc/ssl/certs/ca-certificates.crt')
     mqtt_client.username_pw_set(username, password)
     mqtt_client.on_connect = on_connect
-    mqtt_client.on_disconnect = lambda client, userdata, disconnect_flags, reason_code, properties: print(f"Disconnected from MQTT Broker, return code {reason_code}")
+    mqtt_client.on_disconnect = lambda client, userdata, disconnect_flags, reason_code, properties: print(
+        f"Disconnected from MQTT Broker, return code {reason_code}")
     mqtt_client.connect(broker, port)
     return mqtt_client
 
@@ -70,40 +75,43 @@ def publish_stats(mqtt_client):
 
 
 def consume_from_adsb_hub():
-
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect(("127.0.0.1", 5002))
-    bs = bufsock.bufsock(s)
-
     callsigns = {}
 
     while True:
-        try:
-            data = bs.readto(b'\n')
-            #print(data)
-            parsed_data = parse(data.decode('utf-8'))
-            if parsed_data is None:
-                continue
-            # print(parsed_data)
-            icao24 = parsed_data['icao24']
-            callsign = parsed_data['callsign']
-            if callsign is not None:
-                callsigns[icao24] = callsign
-                # print(callsign)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        print("Connecting")
+        s.connect((sbs1_host, sbs1_port))
+        stream = socket.SocketIO(s, mode='rb')
+        while not stream.closed:
+            try:
+                data = stream.readline()
+                # print(data)
+                parsed_data = parse(data.decode('utf-8'))
+                if parsed_data is None:
+                    continue
+                # print(parsed_data)
+                icao24 = parsed_data['icao24']
+                callsign = parsed_data['callsign']
+                if callsign is not None:
+                    callsigns[icao24] = callsign
+                    # print(callsign)
 
-            lat = parsed_data['lat']
-            lon = parsed_data['lon']
+                lat = parsed_data['lat']
+                lon = parsed_data['lon']
 
-            callsign = callsigns[icao24] if icao24 in callsigns else None
+                callsign = callsigns[icao24] if icao24 in callsigns else None
 
-            if callsign is not None:
-                flights_cache[icao24] = None
+                if callsign is not None:
+                    flights_cache[icao24] = None
 
-            message_queue.put({'icao24': icao24, 'callsign': callsign, 'lat': lat, 'lon': lon})
+                message_queue.put({'icao24': icao24, 'callsign': callsign, 'lat': lat, 'lon': lon})
 
-        except Exception as e:
-            print(f"Caught exception")
-            print(e)
+            except Exception as e:
+                print(f"Caught exception")
+                print(e)
+        print("Socket closed, reconnecting")
+        time.sleep(5)
+
 
 def publish_queue_message(mqtt_client):
     while True:
@@ -115,7 +123,7 @@ def publish_queue_message(mqtt_client):
             lon = message['lon']
 
             if lat is not None and lon is not None and callsign is not None:
-                #print(f"Flight: {callsigns.get(icao24, 'Unknown')}, Lat: {lat}, Lon: {lon}")
+                # print(f"Flight: {callsigns.get(icao24, 'Unknown')}, Lat: {lat}, Lon: {lon}")
                 topic = f"adsb/adsb/flights/{callsign}/location"
                 publish(mqtt_client, topic, f'{lat},{lon}')
 
@@ -125,7 +133,6 @@ def publish_queue_message(mqtt_client):
 
 
 def main():
-
     mqtt_client = connect_mqtt()
 
     publish_stats_thread = Thread(target=publish_stats, args=(mqtt_client,))
