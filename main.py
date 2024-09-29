@@ -19,8 +19,8 @@ load_dotenv()
 broker = 'gcmb.io'
 port = 8883
 client_id = 'adsb/adsb/data-generator/pub'
-username = 'adsb/adsb/data-generator'
-password = os.environ['GCMB_PASSWORD']
+username = os.environ['MQTT_USERNAME']
+password = os.environ['MQTT_PASSWORD']
 
 sbs1_host = os.environ.get('SBS1_HOST', 'localhost')
 sbs1_port = int(os.environ.get('SBS1_PORT', '5002'))
