@@ -79,7 +79,7 @@ def consume_from_adsb_hub():
 
     while True:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        print("Connecting")
+        print(f"Connecting to {sbs1_host}:{sbs1_port}")
         s.connect((sbs1_host, sbs1_port))
         stream = socket.SocketIO(s, mode='rb')
         while not stream.closed:
