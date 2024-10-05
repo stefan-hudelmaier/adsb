@@ -1,0 +1,3 @@
+## {callsign}
+
+<WorldMap topic="location" />
