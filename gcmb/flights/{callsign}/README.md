@@ -1,3 +1,3 @@
 ## {callsign}
 
-<WorldMap topic="adsb/adsb/flights/{callsign}/location" />
+<WorldMap topic="flights/{callsign}/location" />
