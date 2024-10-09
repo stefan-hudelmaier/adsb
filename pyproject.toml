@@ -6,7 +6,7 @@ authors = ["Stefan Hudelmaier <stefan.hudelmaier@device-insight.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = "^3.11"
 python-dateutil = "2.9.0.post0"
 paho-mqtt = "2.1.0"
 python-dotenv = "1.0.1"

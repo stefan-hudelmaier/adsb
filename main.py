@@ -81,20 +81,20 @@ def consume_from_adsb_hub():
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         print(f"Connecting to {sbs1_host}:{sbs1_port}")
         s.connect((sbs1_host, sbs1_port))
-        stream = socket.SocketIO(s, mode='rb')
-        while not stream.closed:
+        f = s.makefile("rb", buffering=0)
+        while True:
             try:
-                data = stream.readline()
-                # print(data)
+                data = f.readline()
+
+                if data == b'':
+                    break
                 parsed_data = parse(data.decode('utf-8'))
                 if parsed_data is None:
                     continue
-                # print(parsed_data)
                 icao24 = parsed_data['icao24']
                 callsign = parsed_data['callsign']
                 if callsign is not None:
                     callsigns[icao24] = callsign
-                    # print(callsign)
 
                 lat = parsed_data['lat']
                 lon = parsed_data['lon']
