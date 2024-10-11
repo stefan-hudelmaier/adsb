@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os
 import queue
-from argparse import ArgumentParser
 import uuid
 import math
 
@@ -78,19 +77,23 @@ def publish(client, topic, msg):
 
 
 def publish_stats(mqtt_client):
-    while True:
-        time.sleep(5)
-        flights_seen = len(flights_cache)
-        queue_size = message_queue.qsize()
-        messages_per_minute = len(messages_cache)
+        while True:
+            try:
+                time.sleep(5)
+                flights_seen = len(flights_cache)
+                queue_size = message_queue.qsize()
+                messages_per_minute = len(messages_cache)
 
-        # Rounded to seconds
-        running_for = math.floor(time.time() - start_time)
-        print(f"Flights seen: {flights_seen}, Queue size: {queue_size}, Messages per minute: {messages_per_minute}, Running for: {running_for} seconds")
+                # Rounded to seconds
+                running_for = math.floor(time.time() - start_time)
+                print(f"Flights seen: {flights_seen}, Queue size: {queue_size}, Messages per minute: {messages_per_minute}, Running for: {running_for} seconds")
 
-        publish(mqtt_client, "adsb/adsb/stats/flights_seen_in_last_15m", f'{flights_seen}')
-        publish(mqtt_client, "adsb/adsb/stats/queue_size", f'{queue_size}')
-        publish(mqtt_client, "adsb/adsb/stats/messages_per_minute", f'{messages_per_minute}')
+                publish(mqtt_client, "adsb/adsb/stats/flights_seen_in_last_15m", f'{flights_seen}')
+                publish(mqtt_client, "adsb/adsb/stats/queue_size", f'{queue_size}')
+                publish(mqtt_client, "adsb/adsb/stats/messages_per_minute", f'{messages_per_minute}')
+            except Exception as e:
+                logger.error(f"Caught exception when publishing stats")
+                logger.error(e)
 
 
 def consume_from_adsb_hub():
