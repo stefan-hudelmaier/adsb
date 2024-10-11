@@ -25,14 +25,17 @@ password = os.environ['MQTT_PASSWORD']
 sbs1_host = os.environ.get('SBS1_HOST', 'localhost')
 sbs1_port = int(os.environ.get('SBS1_PORT', '5002'))
 
-root = logging.getLogger()
-root.setLevel(logging.DEBUG)
+log_level = os.environ.get('LOG_LEVEL', 'INFO')
+print("Using log level", log_level)
+
+logger = logging.getLogger()
+logger.setLevel(log_level)
 
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.DEBUG)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
-root.addHandler(handler)
+logger.addHandler(handler)
 
 # Keys are icao24
 flights_cache = TTLCache(maxsize=100_000, ttl=60 * 15)
@@ -43,16 +46,16 @@ message_queue = queue.Queue(maxsize=100000)
 def connect_mqtt():
     def on_connect(client, userdata, flags, rc, properties):
         if rc == 0:
-            print("Connected to MQTT Broker")
+            logger.info("Connected to MQTT Broker")
         else:
-            print(f"Failed to connect, return code {rc}")
+            logger.error(f"Failed to connect, return code {rc}")
 
     mqtt_client = mqtt.Client(client_id=client_id,
                               callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
     mqtt_client.tls_set(ca_certs='/etc/ssl/certs/ca-certificates.crt')
     mqtt_client.username_pw_set(username, password)
     mqtt_client.on_connect = on_connect
-    mqtt_client.on_disconnect = lambda client, userdata, disconnect_flags, reason_code, properties: print(
+    mqtt_client.on_disconnect = lambda client, userdata, disconnect_flags, reason_code, properties: logger.warning(
         f"Disconnected from MQTT Broker, return code {reason_code}")
     mqtt_client.connect(broker, port)
     return mqtt_client
@@ -62,9 +65,9 @@ def publish(client, topic, msg):
     result = client.publish(topic, msg, retain=True)
     status = result[0]
     if status == 0:
-        print(f"Sent '{msg}' to topic {topic}")
+        logger.debug(f"Sent '{msg}' to topic {topic}")
     else:
-        print(f"Failed to send message to topic {topic}, reason: {status}")
+        logger.warn(f"Failed to send message to topic {topic}, reason: {status}")
 
 
 def publish_stats(mqtt_client):
@@ -79,9 +82,9 @@ def consume_from_adsb_hub():
 
     while True:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        print(f"Connecting to {sbs1_host}:{sbs1_port}")
+        logger.info(f"Connecting to {sbs1_host}:{sbs1_port}")
         s.connect((sbs1_host, sbs1_port))
-        f = s.makefile("rb", buffering=0)
+        f = s.makefile("rb")
         while True:
             try:
                 data = f.readline()
@@ -107,9 +110,9 @@ def consume_from_adsb_hub():
                 message_queue.put({'icao24': icao24, 'callsign': callsign, 'lat': lat, 'lon': lon})
 
             except Exception as e:
-                print(f"Caught exception")
-                print(e)
-        print("Socket closed, reconnecting")
+                logger.error(f"Caught exception")
+                logger.error(e)
+        logger.info("Socket closed, reconnecting")
         time.sleep(5)
 
 
@@ -128,8 +131,8 @@ def publish_queue_message(mqtt_client):
                 publish(mqtt_client, topic, f'{lat},{lon}')
 
         except Exception as e:
-            print(f"Caught exception")
-            print(e)
+            logger.error(f"Caught exception")
+            logger.error(e)
 
 
 def main():
