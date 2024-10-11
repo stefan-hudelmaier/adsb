@@ -44,7 +44,10 @@ flights_cache = TTLCache(maxsize=100_000, ttl=60 * 15)
 # For measuring throughput
 messages_cache = TTLCache(maxsize=100_000, ttl=60)
 
-message_queue = queue.Queue(maxsize=100000)
+failed_messages_cache = TTLCache(maxsize=100_000, ttl=60)
+
+location_queue = queue.Queue(maxsize=100000)
+stats_queue = queue.Queue(maxsize=1000)
 
 start_time = time.time()
 
@@ -73,24 +76,27 @@ def publish(client, topic, msg):
         logger.debug(f"Sent '{msg}' to topic {topic}")
         messages_cache[uuid.uuid4()] = None
     else:
-        logger.warn(f"Failed to send message to topic {topic}, reason: {status}")
+        logger.debug(f"Failed to send message to topic {topic}, reason: {status}")
+        failed_messages_cache[uuid.uuid4()] = None
 
 
-def publish_stats(mqtt_client):
+def get_stats():
         while True:
             try:
                 time.sleep(5)
                 flights_seen = len(flights_cache)
-                queue_size = message_queue.qsize()
+                queue_size = location_queue.qsize()
                 messages_per_minute = len(messages_cache)
-
-                # Rounded to seconds
+                failed_messages_per_minute = len(failed_messages_cache)
                 running_for = math.floor(time.time() - start_time)
-                print(f"Flights seen: {flights_seen}, Queue size: {queue_size}, Messages per minute: {messages_per_minute}, Running for: {running_for} seconds")
 
-                publish(mqtt_client, "adsb/adsb/stats/flights_seen_in_last_15m", f'{flights_seen}')
-                publish(mqtt_client, "adsb/adsb/stats/queue_size", f'{queue_size}')
-                publish(mqtt_client, "adsb/adsb/stats/messages_per_minute", f'{messages_per_minute}')
+                logger.info(f"Flights seen: {flights_seen}, Queue size: {queue_size}, Successful messages per minute: {messages_per_minute}, Failed messages per minute: {failed_messages_per_minute}, Running for: {running_for} seconds")
+
+                stats_queue.put({
+                    'flights_seen': flights_seen,
+                    'queue_size': queue_size,
+                    'messages_per_minute': messages_per_minute
+                })
             except Exception as e:
                 logger.error(f"Caught exception when publishing stats")
                 logger.error(e)
@@ -126,7 +132,7 @@ def consume_from_adsb_hub():
                 if callsign is not None:
                     flights_cache[icao24] = None
 
-                message_queue.put({'icao24': icao24, 'callsign': callsign, 'lat': lat, 'lon': lon})
+                location_queue.put({'icao24': icao24, 'callsign': callsign, 'lat': lat, 'lon': lon})
 
             except Exception as e:
                 logger.error(f"Caught exception")
@@ -135,14 +141,15 @@ def consume_from_adsb_hub():
         time.sleep(5)
 
 
-def publish_queue_message(mqtt_client):
+def publish_location_queue_messages(mqtt_client):
     while True:
         try:
-            message = message_queue.get()
-            icao24 = message['icao24']
-            callsign = message['callsign']
-            lat = message['lat']
-            lon = message['lon']
+
+            location = location_queue.get()
+            icao24 = location['icao24']
+            callsign = location['callsign']
+            lat = location['lat']
+            lon = location['lon']
 
             if lat is not None and lon is not None and callsign is not None:
                 # print(f"Flight: {callsigns.get(icao24, 'Unknown')}, Lat: {lat}, Lon: {lon}")
@@ -153,18 +160,37 @@ def publish_queue_message(mqtt_client):
             logger.error(f"Caught exception")
             logger.error(e)
 
+def publish_stats_queue_messages(mqtt_client):
+    while True:
+        try:
+            stats_message = stats_queue.get()
+            queue_size = stats_message['queue_size']
+            messages_per_minute = stats_message['messages_per_minute']
+            flights_seen = stats_message['flights_seen']
+
+            publish(mqtt_client, "adsb/adsb/stats/flights_seen_in_last_15m", f'{flights_seen}')
+            publish(mqtt_client, "adsb/adsb/stats/queue_size", f'{queue_size}')
+            publish(mqtt_client, "adsb/adsb/stats/messages_per_minute", f'{messages_per_minute}')
+
+        except Exception as e:
+            logger.error(f"Caught exception")
+            logger.error(e)
+
 
 def main():
     mqtt_client = connect_mqtt()
 
-    publish_stats_thread = Thread(target=publish_stats, args=(mqtt_client,))
-    publish_stats_thread.start()
+    stats_thread = Thread(target=get_stats, args=())
+    stats_thread.start()
 
     adsb_hub_thread = Thread(target=consume_from_adsb_hub, args=())
     adsb_hub_thread.start()
 
-    mqtt_publish_thread = Thread(target=publish_queue_message, args=(mqtt_client,))
-    mqtt_publish_thread.start()
+    mqtt_publish_locations_thread = Thread(target=publish_location_queue_messages, args=(mqtt_client,))
+    mqtt_publish_locations_thread.start()
+
+    mqtt_publish_stats_thread = Thread(target=publish_stats_queue_messages, args=(mqtt_client,))
+    mqtt_publish_stats_thread.start()
 
     mqtt_client.loop_forever()
 
