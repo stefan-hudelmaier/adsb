@@ -2,6 +2,8 @@
 import os
 import queue
 from argparse import ArgumentParser
+import uuid
+import math
 
 import paho.mqtt.client as mqtt
 import socket
@@ -40,8 +42,12 @@ logger.addHandler(handler)
 # Keys are icao24
 flights_cache = TTLCache(maxsize=100_000, ttl=60 * 15)
 
+# For measuring throughput
+messages_cache = TTLCache(maxsize=100_000, ttl=60)
+
 message_queue = queue.Queue(maxsize=100000)
 
+start_time = time.time()
 
 def connect_mqtt():
     def on_connect(client, userdata, flags, rc, properties):
@@ -66,6 +72,7 @@ def publish(client, topic, msg):
     status = result[0]
     if status == 0:
         logger.debug(f"Sent '{msg}' to topic {topic}")
+        messages_cache[uuid.uuid4()] = None
     else:
         logger.warn(f"Failed to send message to topic {topic}, reason: {status}")
 
@@ -73,8 +80,17 @@ def publish(client, topic, msg):
 def publish_stats(mqtt_client):
     while True:
         time.sleep(5)
-        publish(mqtt_client, "adsb/adsb/stats/flights_seen_in_last_15m", f'{len(flights_cache)}')
-        publish(mqtt_client, "adsb/adsb/stats/queue_size", f'{message_queue.qsize()}')
+        flights_seen = len(flights_cache)
+        queue_size = message_queue.qsize()
+        messages_per_minute = len(messages_cache)
+
+        # Rounded to seconds
+        running_for = math.floor(time.time() - start_time)
+        print(f"Flights seen: {flights_seen}, Queue size: {queue_size}, Messages per minute: {messages_per_minute}, Running for: {running_for} seconds")
+
+        publish(mqtt_client, "adsb/adsb/stats/flights_seen_in_last_15m", f'{flights_seen}')
+        publish(mqtt_client, "adsb/adsb/stats/queue_size", f'{queue_size}')
+        publish(mqtt_client, "adsb/adsb/stats/messages_per_minute", f'{messages_per_minute}')
 
 
 def consume_from_adsb_hub():
