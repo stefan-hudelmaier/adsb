@@ -19,7 +19,7 @@ load_dotenv()
 
 broker = 'gcmb.io'
 port = 8883
-client_id = 'adsb/adsb/data-generator/pub'
+client_id = os.environ.get('MQTT_CLIENT_ID', 'adsb/adsb/data-generator/pub')
 username = os.environ['MQTT_USERNAME']
 password = os.environ['MQTT_PASSWORD']
 
@@ -71,9 +71,9 @@ def connect_mqtt():
 
 def publish(client, topic, msg):
     result = client.publish(topic, msg, retain=True)
-    status = result[0]
+    status = result.rc
     if status == 0:
-        logger.debug(f"Sent '{msg}' to topic {topic}")
+        logger.debug(f"Sent '{msg}' to topic {topic} with id {result.mid}. is_published: {result.is_published()}")
         messages_cache[uuid.uuid4()] = None
     else:
         logger.debug(f"Failed to send message to topic {topic}, reason: {status}")

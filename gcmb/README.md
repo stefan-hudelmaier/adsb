@@ -5,7 +5,7 @@ The data originates from [ADSBHub](https://www.adsbhub.org/).
 
 ## Stats
 
-In the last 15 minutes, data from <Topic topic="adsb/adsb/stats/flights_seen_in_last_15m" /> flights was received.
+In the last 15 minutes, data from <Value topic="adsb/adsb/stats/flights_seen_in_last_15m" /> flights was received.
 
 ## Format
 
