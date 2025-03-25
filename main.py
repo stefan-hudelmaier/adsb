@@ -51,6 +51,9 @@ stats_queue = queue.Queue(maxsize=1000)
 
 start_time = time.time()
 
+last_successful_message = None
+
+
 def connect_mqtt():
     def on_connect(client, userdata, flags, rc, properties):
         if rc == 0:
@@ -75,9 +78,11 @@ def publish(client, topic, msg):
     if status == 0:
         logger.debug(f"Sent '{msg}' to topic {topic} with id {result.mid}. is_published: {result.is_published()}")
         messages_cache[uuid.uuid4()] = None
+        return True
     else:
         logger.debug(f"Failed to send message to topic {topic}, reason: {status}")
         failed_messages_cache[uuid.uuid4()] = None
+        return False
 
 
 def get_stats():
@@ -146,7 +151,6 @@ def publish_location_queue_messages(mqtt_client):
         try:
 
             location = location_queue.get()
-            icao24 = location['icao24']
             callsign = location['callsign']
             lat = location['lat']
             lon = location['lon']
@@ -154,11 +158,15 @@ def publish_location_queue_messages(mqtt_client):
             if lat is not None and lon is not None and callsign is not None:
                 # print(f"Flight: {callsigns.get(icao24, 'Unknown')}, Lat: {lat}, Lon: {lon}")
                 topic = f"adsb/adsb/flights/{callsign}/location"
-                publish(mqtt_client, topic, f'{lat},{lon}')
+                successful_publish = publish(mqtt_client, topic, f'{lat},{lon}')
+                if successful_publish:
+                    global last_successful_message
+                    last_successful_message = time.time()
 
         except Exception as e:
             logger.error(f"Caught exception")
             logger.error(e)
+
 
 def publish_stats_queue_messages(mqtt_client):
     while True:
@@ -177,6 +185,14 @@ def publish_stats_queue_messages(mqtt_client):
             logger.error(e)
 
 
+def watchdog():
+    while True:
+        time.sleep(60)
+        if last_successful_message is not None and time.time() - last_successful_message > 60 * 60:
+            logger.error("No messages received in the last hour, restarting")
+            sys.exit(1)
+
+
 def main():
     mqtt_client = connect_mqtt()
 
@@ -191,6 +207,9 @@ def main():
 
     mqtt_publish_stats_thread = Thread(target=publish_stats_queue_messages, args=(mqtt_client,))
     mqtt_publish_stats_thread.start()
+
+    watchdog_thread = Thread(target=watchdog, args=())
+    watchdog_thread.start()
 
     mqtt_client.loop_forever()
 
