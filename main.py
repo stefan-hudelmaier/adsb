@@ -190,7 +190,8 @@ def watchdog():
         time.sleep(60)
         if last_successful_message is not None and time.time() - last_successful_message > 60 * 60:
             logger.error("No messages received in the last hour, restarting")
-            sys.exit(1)
+            # sys.exit would not work in a thread
+            os._exit(1)
 
 
 def main():
