@@ -188,8 +188,8 @@ def publish_stats_queue_messages(mqtt_client):
 def watchdog():
     while True:
         time.sleep(60)
-        if last_successful_message is not None and time.time() - last_successful_message > 60 * 60:
-            logger.error("No messages received in the last hour, restarting")
+        if last_successful_message is not None and time.time() - last_successful_message > 10 * 60:
+            logger.error("No messages received in the 10 minutes, restarting")
             # sys.exit would not work in a thread
             os._exit(1)
 
